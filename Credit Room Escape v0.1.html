@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>社管大樓密室逃脫</title>
+<style>
+:root{--bg:#f4f1ea;--fg:#222;--card:#fff;--bd:#c9c2b0;--ac:#a4272f;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1c1b19;--fg:#eee;--card:#2a2926;--bd:#47443d;--ac:#e0646b}}
+:root[data-theme="dark"]{--bg:#1c1b19;--fg:#eee;--card:#2a2926;--bd:#47443d;--ac:#e0646b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,"Noto Sans TC",sans-serif;display:flex;justify-content:center}
+#app{width:100%;max-width:720px;padding:12px}
+h1{font-size:18px;margin:4px 0}
+#hud{display:flex;justify-content:space-between;gap:8px;font-size:14px;flex-wrap:wrap}
+#stage{position:relative;width:100%;aspect-ratio:16/9;border:2px solid var(--bd);border-radius:12px;overflow:hidden;margin:8px 0}
+.spot{position:absolute;transform:translate(-50%,-50%);background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:10px;padding:6px 8px;cursor:pointer;font-size:13px;text-align:center}
+.spot:hover{border-color:var(--ac)}
+.spot b{display:block;font-size:26px;font-weight:400}
+#dlg{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;min-height:110px}
+#opts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+button,input{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:6px 12px}
+button{cursor:pointer}button:hover{border-color:var(--ac)}
+#pop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);z-index:20}
+#pop.show{display:flex}
+#pop>div{background:var(--card);color:var(--fg);border:2px solid var(--ac);border-radius:12px;padding:16px 20px;max-width:80%;text-align:center}
+#pop p{margin:0 0 12px}
+</style>
+</head>
+<body>
+<div id="app">
+<h1>🔒 社管大樓密室逃脫：Intelligent Technology 期末考</h1>
+<div id="hud"><span id="loc"></span><span id="inv"></span></div>
+<div id="stage"></div>
+<div id="dlg"><div id="txt"></div><div id="opts"></div></div>
+</div>
+<div id="pop"><div><p id="popTxt"></p><button id="popBtn">再試一次</button></div></div>
+<script>
+/* ============ 1. 設定區（最常修改） ============ */
+const P = "Dr. John Sum";
+// 三段密碼依取得順序：教授給 M、電腦給 I、影印機給 T
+const PARTS = { prof: "M", pc: "I", copier: "T" };
+const ORDER = ["prof", "pc", "copier"];
+const CODE = "ITM";   // 信箱正確密碼（玩家需自行重新排列取得的字母）
+
+/* ============ 2. 題庫（a = 正確選項，從 0 開始數） ============ */
+const QUIZ = {
+  asp: { q: "下列哪一項不是傳統 ASP（Application Service Provider）主要提供的服務？",
+    o: ["(A) 遠端託管套裝軟體", "(B) 軟體日常維護與更新", "(C) 租賃式線上系統存取", "(D) AI 自主分析與自動決策"], a: 3 },
+  gpt: { q: "根據外界推測 ChatGPT-4 語言模型的參數量約多少？",
+    o: ["(A) 10⁶", "(B) 10⁹", "(C) 10¹²", "(D) 10¹⁵"], a: 2 },
+  infra: { q: "下列哪一項不屬於資訊基礎架構（Information Infrastructure）？",
+    o: ["(A) 雲端資料中心（Data Center）", "(B) 企業內部運行的 SAP / ERP 採購流程審批系統",
+        "(C) 高速光纖網路與 5G 通訊協定", "(D) 串接不同系統傳輸資料的 API 閘道（API Gateway）"], a: 1 },
+};
+
+/* ============ 3. 遊戲狀態 ============ */
+const G = { room: "r319", inv: [], parts: {}, over: false };
+const has = item => G.inv.includes(item);
+
+/* ============ 4. 場景資料（4 處） ============ */
+const ROOMS = {
+  r319: { name: "319 教室", bg: "#d8cfb8", spots: () => [
+    { e: "👨‍🏫", l: P, x: 50, y: 45, act: profAct },
+    { e: "⬆️", l: "上樓（9F）", x: 85, y: 25, act: () => go("f9", "你爬上樓梯，來到 9 樓。") },
+    { e: "⬇️", l: "下樓（2F）", x: 85, y: 75, act: () => go("lab", "你走下樓梯，來到 2 樓。") },
+  ]},
+  f9: { name: "9F 系所辦公室", bg: "#cfd8b9", spots: () => [
+    { e: "🖨️", l: "影印機上的紙", x: 30, y: 50, act: copierAct },
+    { e: "📬", l: `${P} 的信箱`, x: 70, y: 40, act: mailboxAct },
+    { e: "⬇️", l: "下樓（319）", x: 88, y: 80, act: () => go("r319", "你回到 319 教室。") },
+  ]},
+  lab: { name: "2F 電腦教室", bg: "#b9cbd8", spots: () => [
+    { e: "📋", l: "白板", x: 30, y: 40, act: boardAct },
+    { e: "💻", l: "老師的電腦", x: 68, y: 50, act: pcAct },
+    { e: "⬆️", l: "上樓（319）", x: 88, y: 20, act: () => go("r319", "你回到 319 教室。") },
+    { e: "⬇️", l: "下樓（1F）", x: 88, y: 80, act: () => go("gate", "你走到 1 樓大廳。") },
+  ]},
+  gate: { name: "1F 大門", bg: "#c9b9d8", spots: () => [
+    { e: "🚪", l: "大門感應器", x: 50, y: 45, act: gateAct },
+    { e: "⬆️", l: "上樓（2F）", x: 88, y: 25, act: () => go("lab", "你走上 2 樓。") },
+  ]},
+};
+
+/* ============ 5. 劇情與謎題 ============ */
+function profAct() {
+  if (G.parts.prof) return say([`${P}：「密碼和 USB 都給你了，去找線索吧。」`]);
+  say([`${P}：「期末考開始。社管大樓已經鎖上。」`,
+       `${P}：「找到【密碼】與【鑰匙（磁卡）】才能離開。答對我的問題，我給你第一段密碼和一支 USB。」`],
+    () => askQ("asp", () => {
+      G.parts.prof = PARTS.prof; G.inv.push("💾 USB");
+      say([`${P}：「答對了。第一段密碼是「${PARTS.prof}」，USB 拿去。」`, "（取得：第一段密碼、USB）"]); hud();
+    }, () => say([`${P}：「不對，再想想 ASP 到底在做什麼。」`])));
+}
+function boardAct() {
+  say(["白板寫著：", "10⁶ ≈ MB（百萬）、10⁹ ≈ GB（十億）、10¹² ≈ TB（兆）", "Windows 安裝所需容量約 20GB ~ 30GB"]);
+}
+function pcAct() {
+  if (!has("💾 USB")) return say(["電腦要求插入 USB 才能啟動考題。"]);
+  if (G.parts.pc) return say(["電腦已解鎖，螢幕留著第二段密碼。"]);
+  say(["你插入 USB，電腦跳出題目："], () => askQ("gpt", () => {
+    G.parts.pc = PARTS.pc; say([`答對！第二段密碼是「${PARTS.pc}」。`]); hud();
+  }, () => say(["答錯，電腦要求重新插入 USB（再點一次電腦）。"])));
+}
+function copierAct() {
+  if (G.parts.copier) return say([`紙背面寫著第三段密碼「${PARTS.copier}」。`]);
+  askQ("infra", () => {
+    G.parts.copier = PARTS.copier; say([`答對！紙上浮現第三段密碼「${PARTS.copier}」。`]); hud();
+  }, () => say(["紙卡住了，再想想什麼才算「基礎架構」。"]));
+}
+function mailboxAct() {
+  if (has("💳 磁卡")) return say(["信箱已經空了。"]);
+  input(`${P} 的信箱上了鎖。💡 提示：想想這門課的英文縮寫。（${CODE.length} 碼）：`, v => {
+    const s = v.toUpperCase();
+    const sorted = x => [...x].sort().join("");
+    if (s === CODE) {
+      G.inv.push("💳 磁卡"); say(["信箱開啟！你拿到一張磁卡。"]); hud(); return;
+    }
+    G.tries++;
+    if (sorted(s) === sorted(CODE)) {
+      const hints = [
+        "❌ 字母都對，但順序不對。",
+        `❌ 信箱上貼著課程標籤：「${P}｜Information Technology Management」。`,
+        "❌ 標籤上的三個英文單字，首字母依序是……？",
+      ];
+      popup(hints[Math.min(G.tries - 1, hints.length - 1)], mailboxAct);
+    } else {
+      popup("❌ 密碼錯誤。提示：用你在大樓裡收集到的字母。", mailboxAct);
+    }
+  });
+}
+function gateAct() {
+  if (!has("💳 磁卡")) return say(["感應器亮紅燈：請刷磁卡。"]);
+  G.over = true;
+  say(["滴！綠燈亮起，大門開了。", `${P}：「恭喜，這學期的學分是你的了。」`, "🎉 通關！"],
+    () => opts([["重新開始", () => location.reload()]]));
+}
+
+/* ============ 6. 引擎層 ============ */
+const $ = id => document.getElementById(id);
+function go(r, msg) { G.room = r; render(); if (msg) say([msg]); }
+function render() {
+  const R = ROOMS[G.room], st = $("stage");
+  st.style.background = R.bg; st.innerHTML = "";
+  R.spots().forEach(s => {
+    const b = document.createElement("div");
+    b.className = "spot"; b.style.left = s.x + "%"; b.style.top = s.y + "%";
+    b.innerHTML = `<b>${s.e}</b>${s.l}`; b.onclick = () => !G.over && s.act();
+    st.appendChild(b);
+  });
+  hud();
+}
+function hud() {
+  $("loc").textContent = "📍 " + ROOMS[G.room].name;
+  const got = ORDER.filter(k => G.parts[k]).map(k => G.parts[k]);
+  const left = ORDER.length - got.length;
+  $("inv").textContent =
+    `已取得字母：${got.join("、") || "（無）"}${left ? `（還差 ${left} 個）` : "（順序待解）"}` +
+    `　背包：${G.inv.join("、") || "（空）"}`;
+}
+function opts(list) {
+  const o = $("opts"); o.innerHTML = "";
+  list.forEach(([t, f]) => { const b = document.createElement("button"); b.textContent = t; b.onclick = f; o.appendChild(b); });
+}
+function say(lines, done) {
+  let i = 0;
+  const step = () => { $("txt").textContent = lines[i]; i++;
+    opts(i < lines.length ? [["繼續 ▸", step]] : done ? [["繼續 ▸", done]] : []); };
+  step();
+}
+function ask(q, choices, ans, ok, bad) {
+  $("txt").textContent = q;
+  opts(choices.map((c, i) => [c, () => { opts([]); i === ans ? ok() : bad(); }]));
+}
+function askQ(id, ok, bad) { const Q = QUIZ[id]; ask(Q.q, Q.o, Q.a, ok, bad); }
+function input(q, cb) {
+  $("txt").textContent = q;
+  const o = $("opts"); o.innerHTML = "";
+  const i = document.createElement("input"); i.maxLength = 8; i.size = 10;
+  const b = document.createElement("button"); b.textContent = "確定";
+  b.onclick = () => { o.innerHTML = ""; cb(i.value.trim()); };
+  o.append(i, b); i.focus();
+}
+function popup(msg, done) {
+  $("popTxt").textContent = msg;
+  $("pop").classList.add("show");
+  $("popBtn").onclick = () => {
+    $("pop").classList.remove("show");
+    if (done) done();
+  };
+}
+
+/* ============ 7. 啟動 ============ */
+render();
+say([`期末考當天，${P}走進 319 教室：「從現在起，社管大樓封鎖。」`, "點擊場景中的物件開始調查，先和教授談談。"]);
+</script>
+</body>
+</html>
